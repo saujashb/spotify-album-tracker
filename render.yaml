@@ -1,0 +1,16 @@
+# Render Blueprint. In Render: New → Blueprint → connect this repo.
+# It will prompt for the secret env vars below (SP_DC is your Spotify session cookie).
+services:
+  - type: web
+    name: spotify-album-tracker
+    runtime: docker
+    plan: free
+    envVars:
+      - key: ALBUM_URL
+        sync: false
+      - key: ARTIST_ID
+        sync: false
+      - key: SP_DC
+        sync: false
+      - key: POLL_INTERVAL_SECONDS
+        value: "60"

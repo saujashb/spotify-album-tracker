@@ -1,0 +1,9 @@
+.venv
+.venv312
+__pycache__
+*.pyc
+.env
+data
+.git
+.DS_Store
+debug_*.py
