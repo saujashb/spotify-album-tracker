@@ -2,10 +2,21 @@ const state = {
   counters: new Map(),
   pollIntervalMs: 120000,
   liveActive: false,
+  velocitySamples: [], // {t, total}
+  velocityHistory: [], // recent streams/min values for the sparkline
+  celebrated: new Set(),
+  lastMilestoneTotal: null,
 };
 
 const LIVE_POLL_MS = 2000;
 const DASHBOARD_POLL_MS = 15000;
+const VELOCITY_WINDOW_MS = 60000; // rate measured over the last minute
+const VELOCITY_MIN_ELAPSED_MS = 10000; // need ~10s of data before showing a rate
+const MILESTONES = [
+  100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000,
+  1000000,
+];
+let audioCtx = null;
 
 function formatNumber(value) {
   return new Intl.NumberFormat().format(value ?? 0);
@@ -224,6 +235,210 @@ function renderDashboard(data) {
   state.pollIntervalMs = (data.poll_interval_seconds || 120) * 1000;
 }
 
+function recordVelocity(total) {
+  const now = Date.now();
+  const samples = state.velocitySamples;
+  const last = samples[samples.length - 1];
+  if (!last || last.total !== total || now - last.t > 4000) {
+    samples.push({ t: now, total });
+  }
+  const cutoff = now - 5 * 60 * 1000;
+  while (samples.length > 2 && samples[0].t < cutoff) samples.shift();
+
+  const first = samples[0];
+  const elapsed = now - first.t;
+  const pill = document.getElementById("velocity-pill");
+  const stat = document.getElementById("velocity-stat");
+  if (elapsed < VELOCITY_MIN_ELAPSED_MS) {
+    if (stat) stat.textContent = "…";
+    return;
+  }
+
+  // Base = the newest sample at least VELOCITY_WINDOW_MS old (else the oldest).
+  let base = first;
+  for (let i = samples.length - 1; i >= 0; i--) {
+    if (now - samples[i].t >= VELOCITY_WINDOW_MS) {
+      base = samples[i];
+      break;
+    }
+  }
+  const dtMin = (now - base.t) / 60000;
+  const rate = dtMin > 0 ? Math.max(0, (total - base.total) / dtMin) : 0;
+  const rounded = Math.round(rate);
+
+  const valueEl = document.getElementById("velocity-value");
+  if (valueEl) valueEl.textContent = formatNumber(rounded);
+  if (stat) stat.textContent = formatNumber(rounded);
+  if (pill) {
+    pill.classList.remove("hidden");
+    pill.classList.remove("pop");
+    void pill.offsetWidth;
+    pill.classList.add("pop");
+    setTimeout(() => pill.classList.remove("pop"), 220);
+  }
+
+  state.velocityHistory.push(rate);
+  if (state.velocityHistory.length > 120) state.velocityHistory.shift();
+  drawVelocitySparkline();
+}
+
+function drawVelocitySparkline() {
+  const canvas = document.getElementById("velocity-chart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const data = state.velocityHistory;
+  if (data.length < 2) return;
+
+  const max = Math.max(1, ...data);
+  const pad = 3;
+  const stepX = (width - pad * 2) / (data.length - 1);
+
+  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  grad.addColorStop(0, "rgba(30,215,96,0.35)");
+  grad.addColorStop(1, "rgba(30,215,96,0)");
+
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = pad + i * stepX;
+    const y = height - pad - (v / max) * (height - pad * 2);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(pad + (data.length - 1) * stepX, height);
+  ctx.lineTo(pad, height);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = pad + i * stepX;
+    const y = height - pad - (v / max) * (height - pad * 2);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = "#1ed760";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function checkMilestones(total) {
+  if (state.lastMilestoneTotal === null) {
+    // Baseline on first read so opening at an existing total doesn't fire.
+    state.lastMilestoneTotal = total;
+    MILESTONES.forEach((m) => {
+      if (total >= m) state.celebrated.add(m);
+    });
+    return;
+  }
+  const prev = state.lastMilestoneTotal;
+  for (const m of MILESTONES) {
+    if (prev < m && total >= m && !state.celebrated.has(m)) {
+      state.celebrated.add(m);
+      celebrate(m);
+    }
+  }
+  state.lastMilestoneTotal = total;
+}
+
+function celebrate(milestone) {
+  showMilestoneBanner(milestone);
+  fireConfetti();
+  playChime();
+}
+
+function showMilestoneBanner(milestone) {
+  const banner = document.getElementById("milestone-banner");
+  if (!banner) return;
+  banner.textContent = `🎉 ${formatNumber(milestone)} streams!`;
+  banner.classList.remove("hidden");
+  banner.classList.remove("show");
+  void banner.offsetWidth;
+  banner.classList.add("show");
+  setTimeout(() => banner.classList.remove("show"), 4500);
+}
+
+function fireConfetti() {
+  const canvas = document.getElementById("confetti");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const colors = ["#1ed760", "#ffffff", "#4be38a", "#f7d000", "#ff6b6b", "#5aa9ff"];
+  const parts = [];
+  for (let i = 0; i < 180; i++) {
+    parts.push({
+      x: W / 2 + (Math.random() - 0.5) * 260,
+      y: H * 0.28 + (Math.random() - 0.5) * 40,
+      vx: (Math.random() - 0.5) * 10,
+      vy: Math.random() * -9 - 3,
+      size: Math.random() * 7 + 4,
+      color: colors[(Math.random() * colors.length) | 0],
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.35,
+    });
+  }
+
+  const gravity = 0.24;
+  const start = performance.now();
+  function frame(now) {
+    const t = now - start;
+    ctx.clearRect(0, 0, W, H);
+    parts.forEach((p) => {
+      p.vy += gravity;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rot += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.max(0, 1 - t / 2800);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+      ctx.restore();
+    });
+    if (t < 2800) requestAnimationFrame(frame);
+    else ctx.clearRect(0, 0, W, H);
+  }
+  requestAnimationFrame(frame);
+}
+
+function playChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = audioCtx || new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      const t0 = audioCtx.currentTime + i * 0.1;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.22, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.6);
+    });
+  } catch (err) {
+    // Audio is best-effort; ignore if blocked.
+  }
+}
+
 async function fetchLive() {
   const response = await fetch("/api/live");
   if (!response.ok) throw new Error("live feed unavailable");
@@ -244,6 +459,11 @@ function renderLive(live) {
       duration: 800,
       onIncrease: (delta) => bumpCounter(totalEl, delta),
     });
+  }
+
+  if (typeof live.total_streams === "number") {
+    recordVelocity(live.total_streams);
+    checkMilestones(live.total_streams);
   }
 
   (live.tracks || []).forEach((track) => {
@@ -321,6 +541,24 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
     button.textContent = "Refresh now";
   }
 });
+
+function unlockAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = audioCtx || new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch (err) {
+    // ignore
+  }
+  window.removeEventListener("pointerdown", unlockAudio);
+  window.removeEventListener("keydown", unlockAudio);
+}
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
+
+// Debug helper: trigger a milestone celebration from the console.
+window.testCelebrate = (m = 1000) => celebrate(m);
 
 async function startAutoRefresh() {
   await refreshLive();

@@ -14,6 +14,8 @@
   </head>
   <body>
     <div class="bg-glow"></div>
+    <canvas id="confetti" class="confetti-canvas"></canvas>
+    <div id="milestone-banner" class="milestone-banner hidden"></div>
     <main class="shell">
       <header class="hero" id="hero">
         <div class="hero-album">
@@ -34,6 +36,11 @@
           <p class="counter-value mono" id="total-streams">0</p>
           <p class="counter-label">total album streams</p>
           <div class="counter-delta" id="total-delta"></div>
+          <div class="velocity-pill hidden" id="velocity-pill">
+            <span class="velocity-arrow">▲</span>
+            <span class="mono" id="velocity-value">0</span>
+            <span class="velocity-unit">streams / min</span>
+          </div>
         </div>
 
         <div class="meta-row">
@@ -47,6 +54,11 @@
       </header>
 
       <section class="totals">
+        <article class="stat-card">
+          <p class="label">Streams per minute</p>
+          <p class="value mono" id="velocity-stat">—</p>
+          <canvas id="velocity-chart" class="spark" height="42"></canvas>
+        </article>
         <article class="stat-card">
           <p class="label">Since tracking started</p>
           <p class="value mono" id="total-since-start">—</p>
